@@ -108,6 +108,47 @@ POST https://apihub.agnes-ai.com/v1/images/generations
 
 ---
 
+## ⚠️ 视频查询接口踩坑（重要 · 2026-06-12 实测发现）
+
+Agnes 的视频状态查询有两个接口，行为**不一致**：
+
+| 接口 | 行为 |
+|---|---|
+| `GET /v1/videos/{task_id}`（旧/兼容） | 状态更新**严重延迟**，常卡在 `queued` 长达 25+ 分钟；我们 9 个任务测试时，前 10 分钟此接口全部返回 `queued`，但**任务其实早已 completed** |
+| `GET /agnesapi?video_id=<video_id>&model_name=agnes-video-v2.0`（**官方推荐**） | 状态**实时**更新，首次响应就是 `completed` + `remixed_from_video_id` |
+
+### 推荐做法
+
+```python
+# Step 1: 建任务 -> 同时拿到 task_id 和 video_id
+resp = post("/v1/videos", body)
+task_id  = resp["id"]
+video_id = resp["video_id"]   # ← 关键字段，记下来
+
+# Step 2: 轮询（间隔 5s）— 用 video_id
+while True:
+    r = get(f"/agnesapi?video_id={video_id}&model_name=agnes-video-v2.0")
+    if r["status"] == "completed":
+        url = r["remixed_from_video_id"]      # ← 这就是 mp4 直链
+        break
+    elif r["status"] == "failed":
+        raise Exception(r.get("error"))
+    sleep(5)
+```
+
+### 本次 9 任务最终结果（距离提交 ≈ 25~30 分钟后）
+
+- **6 / 9 已 completed**，下载链接可用（已下载到本地，562 KB – 1.6 MB）
+- **3 / 9 仍 queued**（5 分钟 ~ 25 分钟观察窗内没出片，可能进入更长队列）
+
+### 结论
+
+- **不是免费的不会出片**，而是**轮询接口一定要用 `video_id` 查 `agnesapi`**
+- 用 `task_id` 查 `/v1/videos/{task_id}` 是"历史兼容"，数据可能严重滞后
+- 实际处理时间 5 秒视频大约 1–2 分钟（不是 25 分钟；25 分钟是因为我们一直在拿错的接口查）
+
+---
+
 ## 5. `agnes-video-v2.0`（视频生成 + 音频同步）
 
 ### 工作流（重要：**异步**）

@@ -1,6 +1,6 @@
 # Agnes AI 各模型详细参数 / 实测边界
 
-> 测试时间：2026-06-12（第二轮，按官方文档对齐）
+> 测试时间：2026-06-12（第三轮，按官方文档对齐文本模型）
 > Base URL：`https://apihub.agnes-ai.com`
 > 认证：`Authorization: Bearer sk-...`
 
@@ -9,28 +9,139 @@
 ## 1. `agnes-2.0-flash`（文本主力）
 
 ### 定位
-面向智能体工作流、工具调用、编程、推理的生产级语言模型。Claw-Eval General Leaderboard 第 9，Pass³ 60.9%。
+由 Sapiens AI 开发的快速、高效语言模型，面向智能体工作流、工具调用、编程、推理、多轮对话、图片理解及高频生产环境。
+Claw-Eval General Leaderboard 第 9，Pass³ 60.9%。
 
-### 参数
-| 项 | 推荐值 |
+### 模型限制
+| 项目 | 数值 |
 |---|---|
-| `temperature` | 确定性 0.1-0.3，创意 0.7-0.9 |
-| `top_p` | 1.0（默认） |
-| `max_tokens` | ≤ 4096 实测稳定；文档上限 65,536 |
-| `stream` | 支持 |
-| `tools` / `tool_choice` | 支持 |
-| `thinking`（扩展参数） | 文档提到，可显著提升复杂任务质量 |
+| Context | **256K** tokens |
+| Max Output | **65.5K** tokens |
 
-### 性能
-- 文档上下文：**1,048,576 tokens（约 75 万字）**
-- 单实例 TPS：约 200+，高并发峰值 800
-- 实测响应时间：1.3 ~ 9.2 秒（简 prompt）
+### 价格
+| 类型 | 标准价格 | 现价 |
+|---|---|---|
+| Input Tokens | $0.03 / 1M tokens | **$0 / 1M tokens** |
+| Output Tokens | $0.15 / 1M tokens | **$0 / 1M tokens** |
 
-### 响应头特征
+### 核心能力
+| 能力 | 说明 |
+|---|---|
+| Chat Completion | 对话补全 |
+| 多轮对话 | 保持上下文连续性 |
+| 图片 URL 输入 | 通过公网图片 URL 传入图片 |
+| 图片理解 | 截图分析、信息提取、视觉问答 |
+| 工具调用 | `tools` + `tool_choice`，支持智能体工作流 |
+| Thinking 模式 | OpenAI 格式 `chat_template_kwargs.enable_thinking` 或 Anthropic 格式 `thinking.budget_tokens` |
+| 流式输出 | `stream: true` |
+| JSON 风格输出 | 通过 system prompt 引导 |
+
+### 请求参数
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `model` | string | ✅ | 固定 `agnes-2.0-flash` |
+| `messages` | array | ✅ | 对话消息数组（system / user / assistant） |
+| `messages[].content` | string / array | ✅ | 纯文本或含 `text` + `image_url` 的内容数组 |
+| `temperature` | number | ❌ | 控制随机性，低值更确定 |
+| `top_p` | number | ❌ | 核采样 |
+| `max_tokens` | number | ❌ | 最大输出 token 数 |
+| `stream` | boolean | ❌ | 流式响应 |
+| `tools` | array | ❌ | 工具定义 |
+| `tool_choice` | string / object | ❌ | 工具调用控制 |
+| `chat_template_kwargs` | object | ❌ | OpenAI 格式 Thinking：`{"enable_thinking": true}` |
+| `thinking` | object | ❌ | Anthropic 格式 Thinking：`{"type": "enabled", "budget_tokens": 2048}` |
+
+### 图片 URL 输入格式
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "Describe the content of this image."},
+    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+  ]
+}
 ```
-x-litellm-key-spend: 0.0                  # 免费通道，不计费
-x-litellm-model-group: agnes-2.0-flash
-system_fingerprint: vllm-0.21.0-tp2-...    # 推理层是 vLLM
+
+### 实测结果（2026-06-12）
+
+| 测试 | 耗时 | 输出 tokens | finish_reason | 状态 |
+|---|---|---|---|---|
+| 基础对话 | 8.6s | 725 | stop | ✅ |
+| 流式输出 | 1.6s | 768 (144 chunks) | stop | ✅ |
+| 工具调用 (get_weather) | 3.8s | 26 | **tool_calls** | ✅ 正确返回 `{"location": "Singapore"}` |
+| 图片 URL 输入 | 19.0s | 428 | stop | ✅ 正确描述了图片内容 |
+| Thinking (OpenAI 格式) | 14.1s | 1078 | stop | ✅ 返回 `reasoning_content` + `content` |
+| Thinking (Anthropic 格式) | 1.2s | 13 | stop | ⚠️ 未触发 thinking，仅要求提供代码 |
+| 多轮对话 | 3.6s | 15 | stop | ✅ 345+100=445 正确 |
+| JSON 风格输出 | 1.3s | 30 | stop | ✅ 输出合法 JSON |
+| 长输出 (max_tokens=4096) | 23.2s | 2136 | stop | ✅ |
+| temperature=0 | 1.0s | 2 | stop | ✅ 输出 "4" |
+| temperature=1.5 | 1.1s | 2 | stop | ✅ 输出 "4"（数学题不受影响） |
+
+### 关键发现
+
+1. **图片理解能力确认可用**：传入 `image_url` 后模型能正确描述图片内容（prompt_tokens 从 228 涨到 989，说明图片被编码进了输入）。
+2. **工具调用正常**：`finish_reason=tool_calls`，返回结构化的 `function.arguments`。
+3. **Thinking 模式**：
+   - **OpenAI 格式** `chat_template_kwargs.enable_thinking=true` ✅ 正常工作，返回 `reasoning_content` 字段（2391 字符思考过程）。
+   - **Anthropic 格式** `thinking.budget_tokens` ⚠️ 本次测试未触发 thinking，模型直接回复"请提供代码"。可能是该格式需要特定路由或当前不支持。
+4. **流式输出**：144 chunks / 1.6s，正常。
+5. **上下文窗口是 256K**（不是之前第三方报道的 1M）。
+
+### 推荐调用方式
+
+**基础对话：**
+```bash
+curl https://apihub.agnes-ai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"agnes-2.0-flash",
+       "messages":[
+         {"role":"system","content":"You are a helpful AI assistant."},
+         {"role":"user","content":"Explain how autonomous agents use tools."}
+       ],
+       "temperature":0.7,"max_tokens":1024}'
+```
+
+**流式输出：**
+```bash
+curl https://apihub.agnes-ai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"agnes-2.0-flash",
+       "messages":[{"role":"user","content":"Write a short intro."}],
+       "stream":true}'
+```
+
+**工具调用：**
+```bash
+curl https://apihub.agnes-ai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"agnes-2.0-flash",
+       "messages":[{"role":"user","content":"What is the weather in Singapore?"}],
+       "tools":[{"type":"function","function":{
+         "name":"get_weather",
+         "description":"Get the current weather for a location",
+         "parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}
+       }}]}'
+```
+
+**图片理解：**
+```bash
+curl https://apihub.agnes-ai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"agnes-2.0-flash",
+       "messages":[{"role":"user","content":[
+         {"type":"text","text":"Describe this image."},
+         {"type":"image_url","image_url":{"url":"https://example.com/image.jpg"}}
+       ]}]}'
+```
+
+**Thinking 模式（OpenAI 格式，推荐）：**
+```bash
+curl https://apihub.agnes-ai.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+  -d '{"model":"agnes-2.0-flash",
+       "messages":[{"role":"user","content":"Write a Python CSV processor."}],
+       "chat_template_kwargs":{"enable_thinking":true}}'
 ```
 
 ---
@@ -41,9 +152,13 @@ system_fingerprint: vllm-0.21.0-tp2-...    # 推理层是 vLLM
 轻量文本模型，**多模态**（支持图像输入），无 Thinking 模式，面向即时问答。
 
 ### 与 2.0-flash 的区别
-- 缺少 Thinking 模式 → 复杂推理不如 2.0
-- 原生支持图像理解 → 看图/文档截图问答用它
-- 响应时间相仿
+| 维度 | agnes-2.0-flash | agnes-1.5-flash |
+|---|---|---|
+| Thinking 模式 | ✅ 支持 | ❌ |
+| 工具调用 | ✅ 完整 | 弱或无 |
+| 图片理解 | ✅ 支持 | ✅ 支持 |
+| 推理质量 | 更强 | 轻量 |
+| 上下文 | 256K | 约 128K |
 
 ---
 

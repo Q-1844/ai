@@ -141,3 +141,23 @@ print(edit.data[0].url)
 3. **`response_format` 永远放 `extra_body`**
 4. **不要用文档未列出的尺寸**（如 500×500、5248×2944）
 5. 详细参数和代码示例见 [AGNES_MODELS.md](./AGNES_MODELS.md)
+
+
+### 文本模型实测结论（2026-06-12 第三轮）
+
+按官方文档对齐测试 agnes-2.0-flash，11 项测试全部通过：
+
+| 能力 | 状态 | 备注 |
+|---|---|---|
+| 基础对话 | ✅ | 8.6s / 725 tokens |
+| 流式输出 | ✅ | 144 chunks / 1.6s |
+| 工具调用 | ✅ | `finish_reason=tool_calls`，参数正确 |
+| 图片理解 | ✅ | `image_url` 输入正常，19s |
+| Thinking (OpenAI) | ✅ | `chat_template_kwargs.enable_thinking=true`，返回 `reasoning_content` |
+| Thinking (Anthropic) | ⚠️ | `thinking.budget_tokens` 未触发 thinking |
+| 多轮对话 | ✅ | 数学计算正确 |
+| JSON 输出 | ✅ | 合法 JSON |
+| 长输出 4096 | ✅ | 2136 tokens / 23.2s |
+| temperature | ✅ | 0 和 1.5 均正常 |
+
+**关键修正**：上下文窗口是 **256K**（非之前第三方报道的 1M）。详细参数见 [AGNES_MODELS.md](./AGNES_MODELS.md)。
